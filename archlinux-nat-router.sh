@@ -17,7 +17,10 @@
 #                                                                              #
 ################################################################################
 
-set -e
+set -euo pipefail
+
+# Trap para capturar erros
+trap 'echo -e "\n${RED}[ERRO]${NC} Falha na linha $LINENO. Comando: $BASH_COMMAND"; exit 1' ERR
 
 # Interfaces (auto-detect se vazio)
 ETH_IF="${1:-}"
@@ -98,10 +101,15 @@ install_dependencies() {
     local packages=("iproute2" "nftables" "dnsmasq")
     
     for pkg in "${packages[@]}"; do
-        pacman -Q "$pkg" &>/dev/null || pacman -S --needed --noconfirm "$pkg" || {
-            log_error "Erro ao instalar $pkg"
-            exit 1
-        }
+        if ! pacman -Q "$pkg" &>/dev/null; then
+            log_info "Instalando $pkg..."
+            if ! pacman -S --needed --noconfirm "$pkg" 2>&1; then
+                log_error "Erro ao instalar $pkg"
+                exit 1
+            fi
+        else
+            log_info "$pkg já instalado"
+        fi
     done
 
     log_success "Dependências OK"
@@ -146,13 +154,19 @@ enable_ip_forwarding() {
 setup_nftables() {
     log_step "Configurando Firewall (nftables)"
 
+    log_info "Limpando regras anteriores..."
     nft flush ruleset 2>/dev/null || true
 
-    nft add table inet nat_router
-    nft add chain inet nat_router input { type filter hook input priority 0\; policy accept\; }
-    nft add chain inet nat_router forward { type filter hook forward priority 0\; policy accept\; }
-    nft add chain inet nat_router postrouting { type nat hook postrouting priority 100\; policy accept\; }
-    nft add rule inet nat_router postrouting oifname "$WLAN_IF" masquerade
+    log_info "Criando tabela nat_router..."
+    nft add table inet nat_router || { log_error "Falha ao criar tabela"; exit 1; }
+    
+    log_info "Criando chains..."
+    nft add chain inet nat_router input { type filter hook input priority 0\; policy accept\; } || { log_error "Falha na chain input"; exit 1; }
+    nft add chain inet nat_router forward { type filter hook forward priority 0\; policy accept\; } || { log_error "Falha na chain forward"; exit 1; }
+    nft add chain inet nat_router postrouting { type nat hook postrouting priority 100\; policy accept\; } || { log_error "Falha na chain postrouting"; exit 1; }
+    
+    log_info "Adicionando regra de masquerade..."
+    nft add rule inet nat_router postrouting oifname "$WLAN_IF" masquerade || { log_error "Falha no masquerade"; exit 1; }
 
     log_success "nftables: Masquerade em $WLAN_IF"
 }
@@ -164,6 +178,7 @@ setup_nftables() {
 setup_dnsmasq() {
     log_step "Configurando DHCP/DNS (dnsmasq)"
 
+    log_info "Criando arquivo de configuração..."
     cat > /etc/dnsmasq.conf <<EOF
 interface=$ETH_IF
 except-interface=lo
@@ -177,8 +192,14 @@ bind-interfaces
 cache-size=1000
 EOF
 
-    systemctl restart dnsmasq
-    log_success "dnsmasq: Pool $DHCP_START-$DHCP_END"
+    log_info "Reiniciando dnsmasq..."
+    if systemctl restart dnsmasq 2>&1; then
+        log_success "dnsmasq: Pool $DHCP_START-$DHCP_END"
+    else
+        log_error "Falha ao iniciar dnsmasq"
+        systemctl status dnsmasq --no-pager || true
+        exit 1
+    fi
 }
 
 # ============================================================================
@@ -259,7 +280,13 @@ validate_setup() {
 # ============================================================================
 
 main() {
-    echo "Arch Linux NAT Router (LiveUSB)"
+    echo "========================================="
+    echo "  Arch Linux NAT Router (LiveUSB)"
+    echo "========================================="
+    echo ""
+    
+    log_info "Iniciando setup..."
+    
     check_root
     validate_interfaces
     install_dependencies
@@ -268,6 +295,9 @@ main() {
     setup_nftables
     setup_dnsmasq
     validate_setup
+    
+    echo ""
+    log_success "Setup concluído com sucesso!"
 }
 
 main "$@"
