@@ -22,9 +22,12 @@ timedatectl status
 ### 2. Configurar Wi-Fi
 
 ```bash
-nmcli device wifi list
-nmcli device wifi connect "SSID" password "SENHA"
-nmcli connection show
+iwctl
+device list
+station wlan0 scan
+station wlan0 get-networks
+station wlan0 connect "SSID"
+exit
 ```
 
 ### 3. Clonar Repositório
@@ -49,12 +52,6 @@ sudo ./archlinux-nat-router.sh
 sudo ./archlinux-nat-router.sh enp3s0 wlp4s0
 ```
 
-### Com autoboot via systemd
-
-```bash
-sudo ./archlinux-nat-router.sh enp3s0 wlp4s0 1
-```
-
 ## Limpar Configurações
 
 ```bash
@@ -69,10 +66,10 @@ sudo ./cleanup-archlinux-nat-router.sh --force
 
 ## Configurações Padrão
 
-- **Rede LAN:** 192.168.123.0/24
-- **Gateway:** 192.168.123.1
-- **DHCP:** 192.168.123.10 - 192.168.123.100
-- **Backup:** `/root/nat-router-backups`
+- **Rede LAN:** 10.42.0.0/24
+- **Gateway:** 10.42.0.1
+- **DHCP:** 10.42.0.10 - 10.42.0.100
+- **Persistência:** nenhuma (LiveUSB)
 
 ## Conectar PC via Ethernet
 
@@ -83,20 +80,20 @@ sudo ./cleanup-archlinux-nat-router.sh --force
 # Linux
 sudo dhclient eth0
 # ou
-sudo ip addr add 192.168.123.50/24 dev eth0
-sudo ip route add default via 192.168.123.1
+sudo ip addr add 10.42.0.50/24 dev eth0
+sudo ip route add default via 10.42.0.1
 ```
 
 ```bash
 # Windows
 # Automaticamente via DHCP ou:
 ipconfig /all
-# Configure manualmente com gateway 192.168.123.1
+# Configure manualmente com gateway 10.42.0.1
 ```
 
 ## Troubleshooting
 
-- **Wi-Fi não conecta:** `nmcli connection show`
+- **Wi-Fi não conecta:** `iwctl station wlan0 show`
 - **Ver interfaces:** `ip link show`
-- **Testar conectividade:** `ping 192.168.123.1`
+- **Testar conectividade:** `ping 10.42.0.1`
 - **Logs:** `sudo journalctl -xe`
