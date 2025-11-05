@@ -64,7 +64,7 @@ check_root() {
 detect_eth_interface() {
     log_info "Procurando interface Ethernet..."
     local iface
-    for iface in $(ip link show | grep -E '^[0-9]+:' | awk -F': ' '{print $2}' | grep -v 'lo'); do
+    for iface in $(ip link show | grep -E '^[0-9]+:' | cut -d: -f2 | tr -d ' ' | grep -v 'lo'); do
         if ! iw dev "$iface" info &>/dev/null; then
             echo "$iface"
             return 0
@@ -105,7 +105,7 @@ validate_interfaces() {
         log_info "Uso: $0 [eth_interface] [wlan_interface]"
         echo ""
         echo "Interfaces disponíveis:"
-        ip link show | grep -E '^[0-9]+:' | awk -F': ' '{print "  - " $2}'
+        ip link show | grep -E '^[0-9]+:' | cut -d: -f2 | tr -d ' '
         exit 1
     fi
 
