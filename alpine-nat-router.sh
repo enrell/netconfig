@@ -127,11 +127,12 @@ install_dependencies() {
     apk update
     
     log_info "Installing required packages..."
-    local packages="iproute2 nftables dnsmasq udhcpc openrc"
+    local packages="iproute2 nftables dnsmasq udhcpc openrc alpine-conf"
     
     # Add wireless tools only if Wi-Fi connection via script is requested
     if [ -n "$WIFI_SSID" ]; then
-        packages="$packages wpa_supplicant wireless-tools"
+        # Use iwd (lighter than wpa_supplicant, Alpine default)
+        packages="$packages iwd"
     fi
     
     # shellcheck disable=SC2086
@@ -155,19 +156,39 @@ setup_wifi_connection() {
         exit 1
     fi
     
-    log_info "Setting up Wi-Fi connection to '$WIFI_SSID'..."
+    log_info "Setting up Wi-Fi connection to '$WIFI_SSID' using iwd..."
     
     # Bring up Wi-Fi interface
     log_info "Bringing up interface $WLAN_IF..."
     ip link set "$WLAN_IF" up
     sleep 1
     
-    # Generate wpa_supplicant configuration
-    local wpa_conf="/etc/wpa_supplicant/wpa_supplicant.conf"
-    log_info "Creating wpa_supplicant configuration..."
+    # Connect using iwd (Alpine's preferred wireless daemon)
+    log_info "Connecting to '$WIFI_SSID' using iwd..."
     
-    mkdir -p /etc/wpa_supplicant
-    cat > "$wpa_conf" <<EOF
+    # Start iwd service if not running
+    rc-service iwd start 2>/dev/null || true
+    sleep 1
+    
+    # Connect using iwctl (iwd control tool)
+    if command -v iwctl >/dev/null 2>&1; then
+        # Connect with password
+        iwctl station "$WLAN_IF" connect "$WIFI_SSID" --passphrase "$WIFI_PSK" 2>/dev/null
+        sleep 3
+        
+        # Verify connection
+        local wifi_status=$(iwctl station "$WLAN_IF" show 2>/dev/null | grep -i "connected" || echo "")
+        if [ -z "$wifi_status" ]; then
+            log_warn "iwd connection may have failed; trying alternative method..."
+        fi
+    else
+        log_warn "iwctl not found; trying manual wpa_supplicant as fallback..."
+        
+        # Fallback: use wpa_supplicant if iwd not available
+        local wpa_conf="/etc/wpa_supplicant/wpa_supplicant.conf"
+        mkdir -p /etc/wpa_supplicant
+        
+        cat > "$wpa_conf" <<EOF
 ctrl_interface=/var/run/wpa_supplicant
 update_config=1
 
@@ -176,15 +197,14 @@ network={
     psk="$WIFI_PSK"
 }
 EOF
-    chmod 600 "$wpa_conf"
-    
-    # Start wpa_supplicant
-    log_info "Starting wpa_supplicant..."
-    killall wpa_supplicant 2>/dev/null || true
-    sleep 1
-    
-    wpa_supplicant -B -i "$WLAN_IF" -c "$wpa_conf" -D nl80211,wext
-    sleep 2
+        chmod 600 "$wpa_conf"
+        
+        killall wpa_supplicant 2>/dev/null || true
+        sleep 1
+        
+        wpa_supplicant -B -i "$WLAN_IF" -c "$wpa_conf" -D nl80211,wext 2>/dev/null || true
+        sleep 2
+    fi
     
     # Request IP via DHCP
     log_info "Requesting IP via DHCP on $WLAN_IF..."
