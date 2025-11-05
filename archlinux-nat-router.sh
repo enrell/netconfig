@@ -58,13 +58,27 @@ check_root() {
 # ============================================================================
 
 detect_eth_interface() {
-    ip link show | grep "^[0-9]" | grep -oE "^\d+:\s+[^:@]+" | awk '{print $2}' | grep -v "^lo$" | while read iface; do
-        iw dev "$iface" info &>/dev/null 2>&1 || { echo "$iface"; return; }
+    log_info "Procurando interface Ethernet..."
+    local iface
+    for iface in $(ip link show | grep -E '^[0-9]+:' | awk -F': ' '{print $2}' | grep -v 'lo'); do
+        if ! iw dev "$iface" info &>/dev/null; then
+            echo "$iface"
+            return 0
+        fi
     done
+    return 1
 }
 
 detect_wlan_interface() {
-    iw dev 2>/dev/null | grep "Interface" | awk '{print $2}' | head -n1
+    log_info "Procurando interface Wi-Fi..."
+    if command -v iw &>/dev/null; then
+        local wlan=$(iw dev 2>/dev/null | grep "Interface" | awk '{print $2}' | head -n1)
+        if [[ -n "$wlan" ]]; then
+            echo "$wlan"
+            return 0
+        fi
+    fi
+    return 1
 }
 
 # ============================================================================
@@ -74,19 +88,32 @@ detect_wlan_interface() {
 validate_interfaces() {
     log_step "Validando Interfaces"
 
-    [[ -z "$ETH_IF" ]] && ETH_IF=$(detect_eth_interface)
-    [[ -z "$WLAN_IF" ]] && WLAN_IF=$(detect_wlan_interface)
+    if [[ -z "$ETH_IF" ]]; then
+        ETH_IF=$(detect_eth_interface) || ETH_IF=""
+    fi
+    
+    if [[ -z "$WLAN_IF" ]]; then
+        WLAN_IF=$(detect_wlan_interface) || WLAN_IF=""
+    fi
 
     if [[ -z "$ETH_IF" ]] || [[ -z "$WLAN_IF" ]]; then
         log_error "Não foi possível detectar interfaces"
         log_info "Uso: $0 [eth_interface] [wlan_interface]"
+        echo ""
         echo "Interfaces disponíveis:"
-        ip link show | grep "^[0-9]" | grep -oE "^\d+:\s+[^:@]+" | awk '{print "  - " $2}'
+        ip link show | grep -E '^[0-9]+:' | awk -F': ' '{print "  - " $2}'
         exit 1
     fi
 
-    ip link show "$ETH_IF" &>/dev/null || { log_error "Interface $ETH_IF não existe"; exit 1; }
-    ip link show "$WLAN_IF" &>/dev/null || { log_error "Interface $WLAN_IF não existe"; exit 1; }
+    if ! ip link show "$ETH_IF" &>/dev/null; then
+        log_error "Interface $ETH_IF não existe"
+        exit 1
+    fi
+    
+    if ! ip link show "$WLAN_IF" &>/dev/null; then
+        log_error "Interface $WLAN_IF não existe"
+        exit 1
+    fi
 
     log_success "Interfaces validadas: $ETH_IF (LAN) + $WLAN_IF (WAN)"
 }
