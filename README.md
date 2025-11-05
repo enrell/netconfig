@@ -142,68 +142,161 @@ chmod +x *.sh
 
 ## 📡 Conectar ao Wi-Fi (Pré-requisito)
 
-Se você ainda não tem acesso à internet no notebook, siga este **mini tutorial** para conectar ao Wi-Fi manualmente:
+Se você ainda não tem acesso à internet no notebook, siga um desses métodos para conectar ao Wi-Fi no Alpine:
 
-### Passo 1: Verificar interface Wi-Fi
+### ⚡ Método 1: Usar `setup-interfaces` (Recomendado - Alpine padrão)
+
+O Alpine Linux já vem com a ferramenta ideal para isso:
 
 ```bash
-# Lista todas as interfaces
-ip link show
+# Execute o setup interativo
+setup-interfaces
 
-# Procure por algo como: wlan0, wlan1, wlp0s20f3, etc
-# Exemplo de output:
-# 2: wlan0: <BROADCAST,MULTICAST> mtu 1500
+# Será perguntado:
+# 1. "Which one do you want to initialize?" → Escolha 'wlan0'
+# 2. "Ip address for wlan0?" → Digite 'dhcp'
+# 3. "Do you want to use SSID-based authentication?" → Digite 'yes'
+# 4. "SSID?" → Digite o nome da sua rede
+# 5. "Password?" → Digite a senha
+# 6. Se pedir "Do you want any additional manual configuration?" → Digite 'no'
+
+# Pronto! Serviço de rede será iniciado automaticamente
 ```
 
-Anote o nome da interface (ex: `wlan0`).
-
-### Passo 2: Ativar a interface Wi-Fi
+**Verificar se funcionou:**
 
 ```bash
-# Suba a interface (substitua 'wlan0' se for outro nome)
-ip link set wlan0 up
+ip addr show wlan0
+# Deve mostrar um IP tipo 192.168.1.x
 
-# Espere 1-2 segundos
-sleep 2
-
-# Verifique se subiu
-ip link show wlan0
-# Deve mostrar "UP" agora
+ping 8.8.8.8
+# Deve funcionar
 ```
 
-### Passo 3: Escanear redes Wi-Fi disponíveis
+---
+
+### 📝 Método 2: Configuração Manual (sem `setup-interfaces`)
+
+Se `setup-interfaces` não estiver disponível:
+
+**Passo 1: Editar `/etc/network/interfaces`**
 
 ```bash
-# Liste as redes Wi-Fi próximas
-iw dev wlan0 scan | grep SSID
+vi /etc/network/interfaces
 
-# Output esperado:
-# SSID: MyNetwork
-# SSID: AnotherNetwork
-# SSID: RouterName
+# Adicione (ou edite) as seguintes linhas:
+auto wlan0
+iface wlan0 inet dhcp
+    use dhcp
+    # Comentário: a senha Wi-Fi será solicitada ou configurada após
 ```
 
-Identifique o SSID (nome) da sua rede.
-
-### Passo 4: Conectar com `wpa_supplicant`
-
-**Opção A: Rede com senha (WPA2/WPA3 - mais comum)**
+**Passo 2: Iniciar a interface**
 
 ```bash
-# Crie um arquivo de configuração temporário
-cat > /tmp/wpa.conf <<EOF
-ctrl_interface=/var/run/wpa_supplicant
-network={
-    ssid="SuaRede"
-    psk="suaSenha123"
-}
-EOF
+# Inicie o serviço de rede
+rc-service networking restart
 
-# Inicie wpa_supplicant em background
-wpa_supplicant -B -i wlan0 -c /tmp/wpa.conf -D nl80211,wext
-
-# Espere conexão
+# Espere 3-5 segundos
 sleep 3
+
+# Verifique IP
+ip addr show wlan0
+```
+
+**Passo 3: Se pedir credenciais Wi-Fi**
+
+Se a interface subir mas não conectar, você pode usar `iwd` (wireless daemon leve):
+
+```bash
+# Instale iwd
+apk add --no-cache iwd
+
+# Ative iwctl para conectar
+iwctl
+
+# No prompt iwctl, digite:
+# > device list
+# > station wlan0 scan
+# > station wlan0 get-networks
+# > station wlan0 connect "SuaRede"  
+# > exit
+
+# Solicite DHCP
+udhcpc -i wlan0
+```
+
+---
+
+### 🔧 Método 3: Script de Conexão Rápida
+
+Se nenhum dos anteriores funcionar, use este script:
+
+```bash
+#!/bin/sh
+# save as /tmp/connect-wifi.sh
+
+SSID="SuaRede"
+PASS="suaSenha"
+IFACE="wlan0"
+
+# Ativar interface
+ip link set $IFACE up
+sleep 1
+
+# Tentar com iwd
+if command -v iwctl >/dev/null; then
+    iwctl station $IFACE connect "$SSID" --passphrase "$PASS"
+    sleep 2
+else
+    # Fallback: tentar scan manual
+    echo "iwd não disponível. Interface levantada em $IFACE"
+    echo "Verifique com: ip link show"
+fi
+
+# Solicitar IP via DHCP
+udhcpc -i $IFACE
+
+# Verificar
+echo "Testando conexão..."
+ping -c 1 8.8.8.8 && echo "✓ Conectado!" || echo "✗ Falhou"
+```
+
+Execute:
+
+```bash
+chmod +x /tmp/connect-wifi.sh
+/tmp/connect-wifi.sh
+```
+
+---
+
+### ✅ Wi-Fi Conectado! Agora baixe o script
+
+Uma vez conectado, você pode baixar e executar o `alpine-nat-router.sh`:
+
+```bash
+# Instale wget se necessário
+apk add --no-cache wget
+
+# Download e execução
+wget https://raw.githubusercontent.com/seu-usuario/alpine-config/main/alpine-nat-router.sh -O /root/setup.sh
+chmod +x /root/setup.sh
+/root/setup.sh
+```
+
+---
+
+## Troubleshooting de Wi-Fi
+
+| Problema | Solução |
+|----------|---------|
+| `setup-interfaces` não existe | Execute `apk add --no-cache alpine-conf` ou use Método 2 (manual) |
+| Interface não aparece | `ip link show` → procure por `wlan0`, `wlan1`, `wlp0s20f3`, etc. Use o nome correto |
+| Não conecta ao Wi-Fi | Verifique SSID (case-sensitive) e senha. Tente: `iwctl station wlan0 get-networks` |
+| Tem interface mas sem IP | Execute: `udhcpc -i wlan0` para solicitar DHCP |
+| `ping` não resolve nomes | Adicione DNS ao `/etc/resolv.conf`: `nameserver 8.8.8.8` |
+| `wget` comando não encontrado | Instale: `apk add --no-cache wget curl` |
 
 # Solicite IP via DHCP
 udhcpc -i wlan0
@@ -215,41 +308,13 @@ ping 8.8.8.8
 **Opção B: Rede aberta (sem senha)**
 
 ```bash
-# Para redes sem senha:
-cat > /tmp/wpa.conf <<EOF
-ctrl_interface=/var/run/wpa_supplicant
-network={
-    ssid="RedeAberta"
-    key_mgmt=NONE
-}
-EOF
+# Instale wget se necessário
+apk add --no-cache wget
 
-wpa_supplicant -B -i wlan0 -c /tmp/wpa.conf -D nl80211,wext
-sleep 3
-udhcpc -i wlan0
-ping 8.8.8.8
-```
-
-### Passo 5: Verificar conectividade
-
-```bash
-# Verificar IP recebido
-ip addr show wlan0
-# Deve mostrar um IP tipo 192.168.1.x
-
-# Testar acesso à internet
-ping google.com
-# Deve funcionar agora
-```
-
-### ✅ Wi-Fi Conectado! Agora baixe o script
-
-Uma vez conectado, você pode baixar e executar o `alpine-nat-router.sh`:
-
-```bash
+# Download e execução
 wget https://raw.githubusercontent.com/seu-usuario/alpine-config/main/alpine-nat-router.sh -O /root/setup.sh
 chmod +x /root/setup.sh
-./root/setup.sh
+/root/setup.sh
 ```
 
 ---
@@ -258,10 +323,12 @@ chmod +x /root/setup.sh
 
 | Problema | Solução |
 |----------|---------|
-| Interface não sobe | `ip link show` → se não vê `wlan0`, pode ser `wlan1` ou outro nome |
-| `wpa_supplicant` não conecta | Verifique SSID (case-sensitive) e senha. Tente `wpa_cli -i wlan0 status` |
-| Tem IP mas sem internet | Verifique gateway: `ip route show` → deve ter rota padrão |
-| Comando `wget` não existe | Instale: `apk add --no-cache wget` |
+| `setup-interfaces` não existe | Execute `apk add --no-cache alpine-conf` ou use Método 2 (manual) |
+| Interface não aparece | `ip link show` → procure por `wlan0`, `wlan1`, `wlp0s20f3`, etc. Use o nome correto |
+| Não conecta ao Wi-Fi | Verifique SSID (case-sensitive) e senha. Tente: `iwctl station wlan0 get-networks` |
+| Tem interface mas sem IP | Execute: `udhcpc -i wlan0` para solicitar DHCP |
+| `ping` não resolve nomes | Adicione DNS ao `/etc/resolv.conf`: `nameserver 8.8.8.8` |
+| `wget` comando não encontrado | Instale: `apk add --no-cache wget curl` |
 
 ---
 
@@ -334,6 +401,8 @@ Para setup em produção com persistência:
 | `DHCP_END` | `192.168.123.100` | Último IP do pool DHCP |
 | `DHCP_LEASE` | `12h` | Tempo de concessão DHCP |
 | `ENABLE_AUTOBOOT` | `0` | Habilitar autoexec no OpenRC (1 = sim) |
+
+> **Nota sobre Wi-Fi:** O script usa `iwd` (wireless daemon leve) por padrão. Se `WIFI_SSID` e `WIFI_PSK` forem fornecidos, o script conectará automaticamente. Veja `ALPINE-WIFI-GUIDE.md` para detalhes sobre outras opções de Wi-Fi.
 
 ## Teste de Funcionamento
 
@@ -625,6 +694,7 @@ reboot
 
 ## Documentação Adicional
 
+- **`ALPINE-WIFI-GUIDE.md`** — Guia completo de Wi-Fi (setup-interfaces, iwd, wpa_supplicant)
 - **`FIREWALL-PERMISSIVE-MODE.md`** — Explicação detalhada do modo permissivo
 - **`CONFIGURATION.md`** — Referência completa de configurações avançadas
 - **`examples.sh`** — Exemplos de uso em diferentes cenários
