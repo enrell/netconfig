@@ -50,7 +50,11 @@ log_error() { echo -e "${RED}[✗]${NC} $1"; }
 log_step() { echo -e "\n${PURPLE}» $1${NC}\n"; }
 
 check_root() {
-    [[ $EUID -ne 0 ]] && { log_error "Execute como root"; exit 1; }
+    if [[ $EUID -ne 0 ]]; then
+        log_error "Execute como root"
+        exit 1
+    fi
+    log_info "Verificação de root OK"
 }
 
 # ============================================================================
