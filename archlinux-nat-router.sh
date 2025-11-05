@@ -64,12 +64,15 @@ check_root() {
 detect_eth_interface() {
     log_info "Procurando interface Ethernet..."
     local iface
-    for iface in $(ip link show | grep -E '^[0-9]+:' | cut -d: -f2 | tr -d ' ' | grep -v 'lo'); do
+    while IFS= read -r iface; do
+        if [[ "$iface" == "lo" ]]; then
+            continue
+        fi
         if ! iw dev "$iface" info &>/dev/null; then
             echo "$iface"
             return 0
         fi
-    done
+    done < <(ip link show | grep -E '^[0-9]+:' | cut -d: -f2 | tr -d ' ')
     return 1
 }
 
