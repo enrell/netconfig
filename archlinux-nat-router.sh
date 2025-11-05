@@ -58,80 +58,32 @@ check_root() {
 }
 
 # ============================================================================
-# DETECÇÃO DE INTERFACES
-# ============================================================================
-
-detect_eth_interface() {
-    log_info "Procurando interface Ethernet..."
-    local iface
-    while IFS= read -r iface; do
-        if [[ "$iface" == "lo" ]]; then
-            continue
-        fi
-        if ! iw dev "$iface" info &>/dev/null; then
-            echo "$iface"
-            return 0
-        fi
-    done < <(ip link show | grep -E '^[0-9]+:' | cut -d: -f2 | tr -d ' ')
-    return 1
-}
-
-detect_wlan_interface() {
-    log_info "Procurando interface Wi-Fi..."
-    if command -v iw &>/dev/null; then
-        local wlan=$(iw dev 2>/dev/null | grep "Interface" | awk '{print $2}' | head -n1)
-        if [[ -n "$wlan" ]]; then
-            echo "$wlan"
-            return 0
-        fi
-    fi
-    return 1
-}
-
-# ============================================================================
 # VALIDAÇÃO DE INTERFACES
 # ============================================================================
 
 validate_interfaces() {
     log_step "Validando Interfaces"
 
-    if [[ -z "$ETH_IF" ]]; then
-        ETH_IF=$(detect_eth_interface) || ETH_IF=""
-    fi
-    
-    if [[ -z "$WLAN_IF" ]]; then
-        WLAN_IF=$(detect_wlan_interface) || WLAN_IF=""
-    fi
-
-    log_info "ETH_IF detectado: '$ETH_IF'"
-    log_info "WLAN_IF detectado: '$WLAN_IF'"
-
     if [[ -z "$ETH_IF" ]] || [[ -z "$WLAN_IF" ]]; then
-        log_error "Não foi possível detectar interfaces"
-        log_info "Uso: $0 [eth_interface] [wlan_interface]"
+        log_error "Você deve especificar as interfaces"
+        log_info "Uso: $0 <eth_interface> <wlan_interface>"
         echo ""
         echo "Interfaces disponíveis:"
         ip link show | grep -E '^[0-9]+:' | cut -d: -f2 | tr -d ' '
         exit 1
     fi
 
-    log_info "Verificando se $ETH_IF existe..."
     if ! ip link show "$ETH_IF" &>/dev/null; then
         log_error "Interface '$ETH_IF' não existe"
-        log_info "Tamanho da string: ${#ETH_IF}"
-        log_info "Bytes: $(echo -n "$ETH_IF" | od -A n -t x1)"
         exit 1
     fi
     
-    log_info "Verificando se $WLAN_IF existe..."
     if ! ip link show "$WLAN_IF" &>/dev/null; then
         log_error "Interface '$WLAN_IF' não existe"
-        log_info "Tamanho da string: ${#WLAN_IF}"
-        log_info "Bytes: $(echo -n "$WLAN_IF" | od -A n -t x1)"
         exit 1
     fi
 
-    log_success "Interfaces validadas: $ETH_IF (LAN) + $WLAN_IF (WAN)"
+    log_success "Interfaces: $ETH_IF (LAN) + $WLAN_IF (WAN)"
 }
 
 # ============================================================================
