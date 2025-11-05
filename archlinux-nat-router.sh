@@ -100,6 +100,9 @@ validate_interfaces() {
         WLAN_IF=$(detect_wlan_interface) || WLAN_IF=""
     fi
 
+    log_info "ETH_IF detectado: '$ETH_IF'"
+    log_info "WLAN_IF detectado: '$WLAN_IF'"
+
     if [[ -z "$ETH_IF" ]] || [[ -z "$WLAN_IF" ]]; then
         log_error "Não foi possível detectar interfaces"
         log_info "Uso: $0 [eth_interface] [wlan_interface]"
@@ -109,13 +112,19 @@ validate_interfaces() {
         exit 1
     fi
 
+    log_info "Verificando se $ETH_IF existe..."
     if ! ip link show "$ETH_IF" &>/dev/null; then
-        log_error "Interface $ETH_IF não existe"
+        log_error "Interface '$ETH_IF' não existe"
+        log_info "Tamanho da string: ${#ETH_IF}"
+        log_info "Bytes: $(echo -n "$ETH_IF" | od -A n -t x1)"
         exit 1
     fi
     
+    log_info "Verificando se $WLAN_IF existe..."
     if ! ip link show "$WLAN_IF" &>/dev/null; then
-        log_error "Interface $WLAN_IF não existe"
+        log_error "Interface '$WLAN_IF' não existe"
+        log_info "Tamanho da string: ${#WLAN_IF}"
+        log_info "Bytes: $(echo -n "$WLAN_IF" | od -A n -t x1)"
         exit 1
     fi
 
