@@ -21,6 +21,8 @@ timedatectl status
 
 ### 2. Configurar Wi-Fi
 
+**Opção 1: iwctl (recomendado)**
+
 ```bash
 iwctl
 device list
@@ -28,6 +30,32 @@ station wlan0 scan
 station wlan0 get-networks
 station wlan0 connect "SSID"
 exit
+```
+
+**Opção 2: wpa_supplicant + wpa_cli (alternativa)**
+
+```bash
+# Criar arquivo de configuração
+cat > /etc/wpa_supplicant/wpa_supplicant.conf <<EOF
+ctrl_interface=/run/wpa_supplicant
+update_config=1
+EOF
+
+# Iniciar wpa_supplicant
+wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf
+
+# Conectar à rede
+wpa_cli
+> add_network
+> set_network 0 ssid "SSID"
+> set_network 0 psk "SENHA"
+> set_network 0 key_mgmt WPA-PSK
+> enable_network 0
+> save_config
+> quit
+
+# Obter IP (DHCP)
+dhclient wlan0
 ```
 
 ### 3. Clonar Repositório
@@ -40,16 +68,18 @@ chmod +x archlinux-nat-router.sh
 
 ## Executar
 
-### Auto-detect (recomendado)
+### Listar interfaces disponíveis
 
 ```bash
-sudo ./archlinux-nat-router.sh
+ip link show
 ```
 
-### Especificar interfaces manualmente
+### Executar (especificar interfaces obrigatório)
 
 ```bash
-sudo ./archlinux-nat-router.sh enp3s0 wlp4s0
+sudo ./archlinux-nat-router.sh <eth_interface> <wlan_interface>
+# Exemplo:
+sudo ./archlinux-nat-router.sh enp1s0f2 wlan0
 ```
 
 ## Limpar Configurações
@@ -93,7 +123,9 @@ ipconfig /all
 
 ## Troubleshooting
 
+- **Listar interfaces:** `ip link show`
 - **Wi-Fi não conecta:** `iwctl station wlan0 show`
-- **Ver interfaces:** `ip link show`
 - **Testar conectividade:** `ping 10.42.0.1`
-- **Logs:** `sudo journalctl -xe`
+- **Status dnsmasq:** `systemctl status dnsmasq`
+- **Ver regras firewall:** `nft list ruleset`
+- **Logs:** `journalctl -xe`
