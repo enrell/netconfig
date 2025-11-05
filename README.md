@@ -2,6 +2,24 @@
 
 Transforma um notebook Alpine Linux (com Wi-Fi) em um **roteador NAT** com acesso completo à LAN para um PC ligado via cabo Ethernet.
 
+## 🚀 Quick Start (30 segundos)
+
+```bash
+# 1. Conecte ao Wi-Fi (se não estiver)
+# [ver seção "Conectar ao Wi-Fi" abaixo]
+
+# 2. Execute o script
+wget https://raw.githubusercontent.com/seu-usuario/alpine-config/main/alpine-nat-router.sh -O /tmp/setup.sh
+chmod +x /tmp/setup.sh
+sudo /tmp/setup.sh
+
+# 3. Plugue o PC via cabo Ethernet e pronto! ✅
+```
+
+**Pronto!** O PC recebe IP automaticamente e tem acesso total à internet + LAN.
+
+---
+
 ## Objetivo
 
 Quando você inicializa o Alpine "standard" no notebook e executa este script, o PC recebe automaticamente um IP via DHCP na porta Ethernet do notebook e pode:
@@ -98,27 +116,167 @@ Toda a configuração de **forwarding**, **NAT**, **firewall** (permissivo) e **
 - Mostra como testar conectividade
 - Dicas de troubleshooting
 
-## Instalação
+## Instalação Rápida
 
-### Copiar para o Notebook
-
-```bash
-scp alpine-nat-router.sh root@<notebook-ip>:/root/
-ssh root@<notebook-ip>
-chmod +x /root/alpine-nat-router.sh
-```
-
-Ou simplesmente:
+### Opção 1: Download direto do GitHub (Recomendado)
 
 ```bash
-# Download direto (se estiver em um servidor)
-wget https://example.com/alpine-nat-router.sh -O /root/alpine-nat-router.sh
-chmod +x /root/alpine-nat-router.sh
+# No notebook Alpine, com Wi-Fi já conectado:
+wget https://raw.githubusercontent.com/seu-usuario/alpine-config/main/alpine-nat-router.sh -O /root/setup.sh
+chmod +x /root/setup.sh
+/root/setup.sh
 ```
+
+### Opção 2: Clone o repositório
+
+```bash
+# Clone completo (requer git)
+apk add --no-cache git
+git clone https://github.com/seu-usuario/alpine-config.git /root/alpine-config
+cd /root/alpine-config
+chmod +x *.sh
+./alpine-nat-router.sh
+```
+
+---
+
+## 📡 Conectar ao Wi-Fi (Pré-requisito)
+
+Se você ainda não tem acesso à internet no notebook, siga este **mini tutorial** para conectar ao Wi-Fi manualmente:
+
+### Passo 1: Verificar interface Wi-Fi
+
+```bash
+# Lista todas as interfaces
+ip link show
+
+# Procure por algo como: wlan0, wlan1, wlp0s20f3, etc
+# Exemplo de output:
+# 2: wlan0: <BROADCAST,MULTICAST> mtu 1500
+```
+
+Anote o nome da interface (ex: `wlan0`).
+
+### Passo 2: Ativar a interface Wi-Fi
+
+```bash
+# Suba a interface (substitua 'wlan0' se for outro nome)
+ip link set wlan0 up
+
+# Espere 1-2 segundos
+sleep 2
+
+# Verifique se subiu
+ip link show wlan0
+# Deve mostrar "UP" agora
+```
+
+### Passo 3: Escanear redes Wi-Fi disponíveis
+
+```bash
+# Liste as redes Wi-Fi próximas
+iw dev wlan0 scan | grep SSID
+
+# Output esperado:
+# SSID: MyNetwork
+# SSID: AnotherNetwork
+# SSID: RouterName
+```
+
+Identifique o SSID (nome) da sua rede.
+
+### Passo 4: Conectar com `wpa_supplicant`
+
+**Opção A: Rede com senha (WPA2/WPA3 - mais comum)**
+
+```bash
+# Crie um arquivo de configuração temporário
+cat > /tmp/wpa.conf <<EOF
+ctrl_interface=/var/run/wpa_supplicant
+network={
+    ssid="SuaRede"
+    psk="suaSenha123"
+}
+EOF
+
+# Inicie wpa_supplicant em background
+wpa_supplicant -B -i wlan0 -c /tmp/wpa.conf -D nl80211,wext
+
+# Espere conexão
+sleep 3
+
+# Solicite IP via DHCP
+udhcpc -i wlan0
+
+# Teste a conexão
+ping 8.8.8.8
+```
+
+**Opção B: Rede aberta (sem senha)**
+
+```bash
+# Para redes sem senha:
+cat > /tmp/wpa.conf <<EOF
+ctrl_interface=/var/run/wpa_supplicant
+network={
+    ssid="RedeAberta"
+    key_mgmt=NONE
+}
+EOF
+
+wpa_supplicant -B -i wlan0 -c /tmp/wpa.conf -D nl80211,wext
+sleep 3
+udhcpc -i wlan0
+ping 8.8.8.8
+```
+
+### Passo 5: Verificar conectividade
+
+```bash
+# Verificar IP recebido
+ip addr show wlan0
+# Deve mostrar um IP tipo 192.168.1.x
+
+# Testar acesso à internet
+ping google.com
+# Deve funcionar agora
+```
+
+### ✅ Wi-Fi Conectado! Agora baixe o script
+
+Uma vez conectado, você pode baixar e executar o `alpine-nat-router.sh`:
+
+```bash
+wget https://raw.githubusercontent.com/seu-usuario/alpine-config/main/alpine-nat-router.sh -O /root/setup.sh
+chmod +x /root/setup.sh
+./root/setup.sh
+```
+
+---
+
+## Troubleshooting de Wi-Fi
+
+| Problema | Solução |
+|----------|---------|
+| Interface não sobe | `ip link show` → se não vê `wlan0`, pode ser `wlan1` ou outro nome |
+| `wpa_supplicant` não conecta | Verifique SSID (case-sensitive) e senha. Tente `wpa_cli -i wlan0 status` |
+| Tem IP mas sem internet | Verifique gateway: `ip route show` → deve ter rota padrão |
+| Comando `wget` não existe | Instale: `apk add --no-cache wget` |
+
+---
 
 ## Uso
 
-### Uso Simples (Auto-detect)
+### ⚡ Uso Mais Rápido (Recomendado)
+
+Depois que o Wi-Fi está conectado:
+
+```bash
+# Download e execução em uma linha
+wget https://raw.githubusercontent.com/seu-usuario/alpine-config/main/alpine-nat-router.sh -O /tmp/setup.sh && chmod +x /tmp/setup.sh && /tmp/setup.sh
+```
+
+### 📋 Uso Simples (Auto-detect)
 
 ```bash
 ./alpine-nat-router.sh
@@ -126,7 +284,7 @@ chmod +x /root/alpine-nat-router.sh
 
 O script detecta automaticamente as interfaces. Se o Wi-Fi **já estiver conectado**, tudo funciona direto.
 
-### Com Conexão Wi-Fi Automática
+### 🌐 Com Conexão Wi-Fi Automática
 
 Se você quer que o script conecte ao Wi-Fi durante a execução:
 
@@ -136,7 +294,9 @@ Se você quer que o script conecte ao Wi-Fi durante a execução:
   WIFI_PSK="mypassword123"
 ```
 
-### Especificar Interfaces Manualmente
+### 🔧 Especificar Interfaces Manualmente
+
+Útil se o auto-detect não funcionar:
 
 ```bash
 ./alpine-nat-router.sh \
@@ -146,7 +306,9 @@ Se você quer que o script conecte ao Wi-Fi durante a execução:
   WIFI_PSK="mypassword123"
 ```
 
-### Com Autoboot e Rede Customizada
+### 🎯 Com Autoboot e Rede Customizada
+
+Para setup em produção com persistência:
 
 ```bash
 ./alpine-nat-router.sh \
@@ -403,8 +565,8 @@ cp /media/usb/alpine-usbkey.apkovl.tar.gz /media/usb/
 #!/bin/sh
 # Script executado no notebook Alpine
 
-# 1. Baixar o script
-wget https://example.com/alpine-nat-router.sh -O /root/setup.sh
+# 1. Baixar o script do GitHub
+wget https://raw.githubusercontent.com/seu-usuario/alpine-config/main/alpine-nat-router.sh -O /root/setup.sh
 chmod +x /root/setup.sh
 
 # 2. Executar com as suas credenciais Wi-Fi
@@ -430,6 +592,16 @@ chmod +x /root/setup.sh
 
 ## Restaurar Configuração Original
 
+Você pode remover todas as configurações do NAT router:
+
+```bash
+# Usar o script de cleanup
+chmod +x cleanup-nat-router.sh
+./cleanup-nat-router.sh --force
+```
+
+Ou manualmente:
+
 ```bash
 # Restaurar dnsmasq
 mv /etc/dnsmasq.conf.bak /etc/dnsmasq.conf
@@ -445,10 +617,19 @@ reboot
 
 ## Requisitos
 
-- Alpine Linux (testado em edge, mas compatível com versões LTS)
-- Acesso root
-- Duas interfaces de rede (Ethernet + Wi-Fi)
-- Conexão Wi-Fi já ativa (ou credenciais para script conectar)
+- **Alpine Linux** (testado em edge, mas compatível com versões LTS)
+- **Acesso root** (sudo ou login direto)
+- **Duas interfaces de rede:** Ethernet (ETH) + Wi-Fi (WLAN)
+- **Conexão Wi-Fi:** Já conectada OU credenciais para o script conectar
+  - Se não tem acesso à internet ainda, veja seção **"Conectar ao Wi-Fi"** acima
+
+## Documentação Adicional
+
+- **`FIREWALL-PERMISSIVE-MODE.md`** — Explicação detalhada do modo permissivo
+- **`CONFIGURATION.md`** — Referência completa de configurações avançadas
+- **`examples.sh`** — Exemplos de uso em diferentes cenários
+- **`test-nat-router.sh`** — Script de teste para validar a configuração
+- **`cleanup-nat-router.sh`** — Script para remover todas as configurações
 
 ## Logs & Debugging
 
@@ -459,6 +640,16 @@ Todos os passos são loggados com cores para fácil leitura:
 - 🟨 **[WARN]** — avisos
 - 🟥 **[ERROR]** — erros críticos
 
+## Contribuindo
+
+Este projeto está no GitHub em: `https://github.com/seu-usuario/alpine-config`
+
+Sinta-se livre para:
+- Reportar issues
+- Sugerir melhorias
+- Fazer Pull Requests
+- Forkar e customizar para suas necessidades
+
 ## Licença
 
 Este script é fornecido como está, sem garantias. Use por sua conta e risco.
@@ -466,3 +657,5 @@ Este script é fornecido como está, sem garantias. Use por sua conta e risco.
 ---
 
 **Desenvolvido para Alpine Linux | NAT Router Setup**
+
+Repositório: [alpine-config](https://github.com/seu-usuario/alpine-config)
