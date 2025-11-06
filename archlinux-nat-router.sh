@@ -5,6 +5,7 @@
 #                                                                              #
 # Setup rápido para transformar notebook em roteador NAT                      #
 # Otimizado para LiveUSB - sem persistência de config                         #
+# Suporta Port Forwarding para serviços na LAN                                #
 #                                                                              #
 # PRÉ-REQUISITOS:                                                              #
 #   • Arch Linux em LiveUSB/LiveCD                                            #
@@ -158,21 +159,28 @@ setup_nftables() {
     log_info "Criando chains..."
     nft add chain inet nat_router input { type filter hook input priority 0\; policy accept\; } || { log_error "Falha na chain input"; exit 1; }
     nft add chain inet nat_router forward { type filter hook forward priority 0\; policy accept\; } || { log_error "Falha na chain forward"; exit 1; }
+    nft add chain inet nat_router prerouting { type nat hook prerouting priority -100\; policy accept\; } || { log_error "Falha na chain prerouting"; exit 1; }
     nft add chain inet nat_router postrouting { type nat hook postrouting priority 100\; policy accept\; } || { log_error "Falha na chain postrouting"; exit 1; }
     
-    log_info "Configurando regras de NAT..."
-    # Masquerade para internet
+    log_info "Configurando NAT para toda a rede LAN..."
+    # NAT completo - não precisa de DNAT específico
+    # O masquerade + forward já permite acesso completo
+    
+    log_info "Configurando NAT (masquerade)..."
     nft add rule inet nat_router postrouting oifname "$WLAN_IF" masquerade || { log_error "Falha no masquerade"; exit 1; }
     
-    log_info "Liberando acesso à rede LAN..."
-    # Permite tráfego da LAN para o roteador (acesso a serviços locais)
+    log_info "Liberando tráfego LAN..."
+    # Permite acesso aos serviços do roteador
     nft add rule inet nat_router input iifname "$ETH_IF" accept
     
-    # Permite forwarding bidirecional entre LAN e WAN
+    # Permite forwarding bidirecional completo
     nft add rule inet nat_router forward iifname "$ETH_IF" oifname "$WLAN_IF" accept
-    nft add rule inet nat_router forward iifname "$WLAN_IF" oifname "$ETH_IF" ct state related,established accept
+    nft add rule inet nat_router forward iifname "$WLAN_IF" oifname "$ETH_IF" accept
 
-    log_success "nftables: NAT + Acesso LAN habilitado"
+    log_success "Firewall configurado:"
+    log_info "  • NAT/Masquerade: $WLAN_IF"
+    log_info "  • Bridge completo: WAN ↔ LAN (todas as portas)"
+    log_info "  • Dispositivos na LAN acessíveis via IP do notebook"
 }
 
 # ============================================================================
@@ -207,6 +215,16 @@ EOF
 }
 
 # ============================================================================
+# SALVAR CONFIGURAÇÃO DO NFTABLES
+# ============================================================================
+
+save_nftables_config() {
+    log_info "Salvando configuração do nftables..."
+    nft list ruleset > /etc/nftables.conf
+    log_success "Configuração salva em /etc/nftables.conf"
+}
+
+# ============================================================================
 # CONFIGURAÇÃO AUTOBOOT COM SYSTEMD
 # ============================================================================
 
@@ -214,10 +232,10 @@ setup_systemd_autoboot() {
     log_step "Configurando Autoboot (systemd service)"
 
     # Criar serviço nat-router
-    cat > /etc/systemd/system/nat-router.service <<'EOF'
+    cat > /etc/systemd/system/nat-router.service <<EOF
 [Unit]
 Description=NAT Router Service for Arch Linux
-After=network-online.target nftables.service dnsmasq.service
+After=network-online.target
 Wants=network-online.target
 Before=multi-user.target
 
@@ -226,8 +244,8 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/bin/bash -c '\
     echo "Starting NAT Router..."; \
-    ip link set ETH_IF up 2>/dev/null || true; \
-    ip addr add LAN_GATEWAY/LAN_NETMASK dev ETH_IF 2>/dev/null || true; \
+    ip link set $ETH_IF up 2>/dev/null || true; \
+    ip addr add $LAN_GATEWAY/$LAN_NETMASK dev $ETH_IF 2>/dev/null || true; \
     sysctl -w net.ipv4.ip_forward=1 > /dev/null; \
     nft -f /etc/nftables.conf; \
     systemctl restart dnsmasq; \
@@ -236,7 +254,7 @@ ExecStart=/usr/bin/bash -c '\
 ExecStop=/usr/bin/bash -c '\
     echo "Stopping NAT Router..."; \
     systemctl stop dnsmasq; \
-    ip addr del LAN_GATEWAY/LAN_NETMASK dev ETH_IF 2>/dev/null || true; \
+    ip addr del $LAN_GATEWAY/$LAN_NETMASK dev $ETH_IF 2>/dev/null || true; \
     nft flush ruleset; \
     echo "NAT Router stopped"'
 
@@ -245,11 +263,6 @@ Restart=no
 [Install]
 WantedBy=multi-user.target
 EOF
-
-    # Substituir placeholders
-    sed -i "s/ETH_IF/$ETH_IF/g" /etc/systemd/system/nat-router.service
-    sed -i "s|LAN_GATEWAY|$LAN_GATEWAY|g" /etc/systemd/system/nat-router.service
-    sed -i "s/LAN_NETMASK/$LAN_NETMASK/g" /etc/systemd/system/nat-router.service
 
     # Recarregar systemd
     systemctl daemon-reload
@@ -270,13 +283,28 @@ validate_setup() {
     log_step "Status Final"
 
     echo "✓ Ethernet ($ETH_IF): $(ip -4 addr show "$ETH_IF" | grep -oE 'inet [^ ]*' | awk '{print $2}')"
+    echo "✓ Wi-Fi ($WLAN_IF): $(ip -4 addr show "$WLAN_IF" | grep -oE 'inet [^ ]*' | awk '{print $2}' | head -1)"
     echo "✓ IP Forwarding: $(cat /proc/sys/net/ipv4/ip_forward)"
-    echo "✓ Firewall: $(nft list ruleset 2>/dev/null | head -1 || echo 'OK')"
     echo "✓ DHCP: $(systemctl is-active dnsmasq)"
     echo ""
-    echo "Conecte o PC via Ethernet e configure:"
-    echo "  • Linux: sudo dhclient eth0"
-    echo "  • Windows: DHCP (automático)"
+    echo "════════════════════════════════════════"
+    echo "  COMO ACESSAR SERVIÇOS NA LAN"
+    echo "════════════════════════════════════════"
+    echo ""
+    echo "Do celular/Wi-Fi, acesse os serviços na LAN:"
+    WLAN_IP=$(ip -4 addr show "$WLAN_IF" | grep -oE 'inet [0-9.]+' | awk '{print $2}' | head -1)
+    echo "  • http://$WLAN_IP:PORTA → 10.42.0.41:PORTA"
+    echo ""
+    echo "Exemplos:"
+    echo "  • Jellyfin: http://$WLAN_IP:8096"
+    echo "  • SSH: ssh -J user@$WLAN_IP user@10.42.0.41"
+    echo "  • Qualquer serviço: substitua a PORTA"
+    echo ""
+    echo "Da LAN (PC conectado via Ethernet):"
+    echo "  • Jellyfin: http://10.42.0.41:8096"
+    echo "  • Configurar rede: sudo dhclient eth0"
+    echo ""
+    echo "════════════════════════════════════════"
 }
 
 # ============================================================================
@@ -297,7 +325,9 @@ main() {
     configure_eth_interface
     enable_ip_forwarding
     setup_nftables
+    save_nftables_config
     setup_dnsmasq
+    setup_systemd_autoboot
     validate_setup
     
     echo ""
