@@ -163,11 +163,17 @@ setup_nftables() {
     nft add chain inet nat_router postrouting { type nat hook postrouting priority 100\; policy accept\; } || { log_error "Falha na chain postrouting"; exit 1; }
     
     log_info "Configurando NAT para toda a rede LAN..."
-    # NAT completo - não precisa de DNAT específico
-    # O masquerade + forward já permite acesso completo
+    
+    # Hairpin NAT - Redireciona conexões do Wi-Fi para o IP do notebook de volta à LAN
+    WLAN_IP=$(ip -4 addr show "$WLAN_IF" | grep -oP 'inet \K[0-9.]+' | head -1)
+    log_info "Criando hairpin NAT para $WLAN_IP → 10.42.0.41..."
+    nft add rule inet nat_router prerouting iifname "$WLAN_IF" ip daddr "$WLAN_IP" dnat to 10.42.0.41
     
     log_info "Configurando NAT (masquerade)..."
-    nft add rule inet nat_router postrouting oifname "$WLAN_IF" masquerade || { log_error "Falha no masquerade"; exit 1; }
+    # Masquerade para internet
+    nft add rule inet nat_router postrouting oifname "$WLAN_IF" masquerade
+    # Masquerade para hairpin (quando vem do Wi-Fi e vai pra LAN)
+    nft add rule inet nat_router postrouting oifname "$ETH_IF" ip saddr "$WLAN_IP" masquerade
     
     log_info "Liberando tráfego LAN..."
     # Permite acesso aos serviços do roteador
@@ -176,11 +182,12 @@ setup_nftables() {
     # Permite forwarding bidirecional completo
     nft add rule inet nat_router forward iifname "$ETH_IF" oifname "$WLAN_IF" accept
     nft add rule inet nat_router forward iifname "$WLAN_IF" oifname "$ETH_IF" accept
+    nft add rule inet nat_router forward iifname "$WLAN_IF" oifname "$ETH_IF" ip daddr 10.42.0.0/24 accept
 
     log_success "Firewall configurado:"
-    log_info "  • NAT/Masquerade: $WLAN_IF"
+    log_info "  • Hairpin NAT: $WLAN_IP → 10.42.0.41"
+    log_info "  • Masquerade: $WLAN_IF (internet) + $ETH_IF (hairpin)"
     log_info "  • Bridge completo: WAN ↔ LAN (todas as portas)"
-    log_info "  • Dispositivos na LAN acessíveis via IP do notebook"
 }
 
 # ============================================================================
