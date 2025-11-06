@@ -1,180 +1,225 @@
 #!/usr/bin/env bash
 
 ################################################################################
-#                  Arch Linux NAT Router Cleanup Script                        #
+#                    NAT Router Cleanup Script                                 #
 #                                                                              #
-# Remove todas as configurações de NAT Router instaladas pelo script setup    #
+# Remove TODAS as configurações do NAT Router                                 #
+# Use antes de reconfigurar ou para desativar o roteador                      #
 #                                                                              #
 # USO:                                                                         #
-#   sudo ./cleanup-archlinux-nat-router.sh         # Limpeza com confirmação  #
-#   sudo ./cleanup-archlinux-nat-router.sh --force # Limpeza sem perguntar    #
+#   sudo ./cleanup-nat-router.sh                                              #
 #                                                                              #
 ################################################################################
 
-set -e
+set -euo pipefail
 
-# Cores
+# ============================================================================
+# CORES
+# ============================================================================
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Opções
-FORCE_CLEANUP="${1:-}"
+log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+log_success() { echo -e "${GREEN}[✓]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[✗]${NC} $1"; }
+log_step() { echo -e "\n${PURPLE}» $1${NC}\n"; }
 
 # ============================================================================
-# FUNÇÕES UTILITÁRIAS
+# VERIFICAR ROOT
 # ============================================================================
 
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
+if [[ $EUID -ne 0 ]]; then
+    log_error "Execute como root: sudo $0"
+    exit 1
+fi
 
-log_success() {
-    echo -e "${GREEN}[✓]${NC} $1"
-}
+# ============================================================================
+# PARAR SERVIÇOS
+# ============================================================================
 
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[✗]${NC} $1"
-}
-
-log_step() {
-    echo -e "\n${PURPLE}═══════════════════════════════════════════════════════${NC}"
-    echo -e "${PURPLE}» $1${NC}"
-    echo -e "${PURPLE}═══════════════════════════════════════════════════════${NC}\n"
-}
-
-# Confirmar
-confirm() {
-    if [[ "$FORCE_CLEANUP" == "--force" ]]; then
-        return 0
+stop_services() {
+    log_step "Parando Serviços"
+    
+    if systemctl is-active --quiet nat-router 2>/dev/null; then
+        log_info "Parando nat-router.service..."
+        systemctl stop nat-router
+        log_success "nat-router.service parado"
+    else
+        log_info "nat-router.service não está ativo"
     fi
     
-    read -p "$(echo -e ${YELLOW}[?]${NC}) $1 (s/N): " -n 1 -r
-    echo
-    [[ $REPLY =~ ^[Ss]$ ]]
-}
-
-# Verificar se é root
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        log_error "Este script deve ser executado como root"
-        echo "Use: sudo $0"
-        exit 1
-    fi
-}
-
-# ============================================================================
-# LIMPEZA
-# ============================================================================
-
-remove_nat_router_service() {
-    log_step "Removendo Serviço NAT Router"
-
-    if [[ -f /etc/systemd/system/nat-router.service ]]; then
-        log_info "Desabilitando serviço nat-router..."
-        systemctl disable nat-router.service 2>/dev/null || true
-        systemctl stop nat-router.service 2>/dev/null || true
-        rm -f /etc/systemd/system/nat-router.service
-        systemctl daemon-reload
-        log_success "Serviço removido"
-    else
-        log_warn "Serviço nat-router não encontrado"
-    fi
-}
-
-remove_nftables_config() {
-    log_step "Removendo Configuração nftables"
-
-    if [[ -f /etc/nftables.conf ]]; then
-        log_info "Desabilitando nftables..."
-        systemctl stop nftables 2>/dev/null || true
-        systemctl disable nftables 2>/dev/null || true
-        
-        # Restaurar backup se existir
-        if [[ -f "$BACKUP_DIR/nftables.conf"* ]]; then
-            log_info "Restaurando configuração anterior..."
-            cp "$BACKUP_DIR/nftables.conf"* /etc/nftables.conf 2>/dev/null || true
-        fi
-        
-        # Limpar nftables
-        nft flush ruleset 2>/dev/null || true
-        
-        log_success "nftables limpo"
-    else
-        log_warn "Configuração nftables não encontrada"
-    fi
-}
-
-remove_dnsmasq_config() {
-    log_step "Removendo Configuração dnsmasq"
-
-    if systemctl is-active --quiet dnsmasq; then
+    if systemctl is-active --quiet dnsmasq 2>/dev/null; then
         log_info "Parando dnsmasq..."
         systemctl stop dnsmasq
         log_success "dnsmasq parado"
+    else
+        log_info "dnsmasq não está ativo"
     fi
-
-    if [[ -f /etc/dnsmasq.conf ]]; then
-        log_info "Removendo configuração dnsmasq..."
-        
-        # Restaurar backup se existir
-        if [[ -f "$BACKUP_DIR/dnsmasq.conf"* ]]; then
-            log_info "Restaurando configuração anterior..."
-            cp "$BACKUP_DIR/dnsmasq.conf"* /etc/dnsmasq.conf 2>/dev/null || true
-        fi
-        
-        log_success "Configuração removida"
-    fi
-
-    # Desabilitar no boot
-    systemctl disable dnsmasq 2>/dev/null || true
 }
 
-remove_sysctl_config() {
-    log_step "Removendo Configuração sysctl"
+# ============================================================================
+# DESABILITAR SERVIÇOS NO BOOT
+# ============================================================================
 
-    if [[ -f /etc/sysctl.d/30-nat-router.conf ]]; then
-        log_info "Removendo arquivo de configuração..."
-        rm -f /etc/sysctl.d/30-nat-router.conf
-        
-        # Recarregar sysctl
-        sysctl -p > /dev/null 2>&1 || true
-        
-        log_success "Configuração sysctl removida"
+disable_services() {
+    log_step "Desabilitando Serviços do Boot"
+    
+    if systemctl is-enabled --quiet nat-router 2>/dev/null; then
+        log_info "Desabilitando nat-router.service..."
+        systemctl disable nat-router
+        log_success "nat-router.service desabilitado"
     else
-        log_warn "Configuração sysctl não encontrada"
+        log_info "nat-router.service já estava desabilitado"
     fi
+    
+    if systemctl is-enabled --quiet dnsmasq 2>/dev/null; then
+        log_info "Desabilitando dnsmasq..."
+        systemctl disable dnsmasq
+        log_success "dnsmasq desabilitado"
+    else
+        log_info "dnsmasq já estava desabilitado"
+    fi
+}
 
-    # Restaurar IP forwarding padrão
-    log_info "Desabilitando IP forwarding..."
+# ============================================================================
+# REMOVER ARQUIVOS DE SERVIÇO
+# ============================================================================
+
+remove_service_files() {
+    log_step "Removendo Arquivos de Configuração"
+    
+    if [[ -f /etc/systemd/system/nat-router.service ]]; then
+        log_info "Removendo /etc/systemd/system/nat-router.service..."
+        rm -f /etc/systemd/system/nat-router.service
+        log_success "Arquivo de serviço removido"
+    else
+        log_info "Arquivo de serviço não encontrado"
+    fi
+    
+    if [[ -f /etc/nftables.conf ]]; then
+        log_info "Removendo /etc/nftables.conf..."
+        rm -f /etc/nftables.conf
+        log_success "Configuração do nftables removida"
+    else
+        log_info "nftables.conf não encontrado"
+    fi
+    
+    if [[ -f /etc/dnsmasq.conf ]]; then
+        log_info "Removendo /etc/dnsmasq.conf..."
+        rm -f /etc/dnsmasq.conf
+        log_success "Configuração do dnsmasq removida"
+    else
+        log_info "dnsmasq.conf não encontrado"
+    fi
+    
+    systemctl daemon-reload
+    log_success "systemd recarregado"
+}
+
+# ============================================================================
+# LIMPAR REGRAS DO FIREWALL
+# ============================================================================
+
+flush_firewall() {
+    log_step "Limpando Firewall (nftables)"
+    
+    log_info "Removendo todas as regras do nftables..."
+    nft flush ruleset 2>/dev/null || true
+    log_success "Regras do nftables limpas"
+}
+
+# ============================================================================
+# DESABILITAR IP FORWARDING
+# ============================================================================
+
+disable_ip_forwarding() {
+    log_step "Desabilitando IP Forwarding"
+    
     sysctl -w net.ipv4.ip_forward=0 > /dev/null
     sysctl -w net.ipv6.conf.all.forwarding=0 > /dev/null
-    log_success "IP forwarding desabilitado"
+    
+    log_success "IP Forwarding desabilitado"
 }
 
-remove_network_config() {
-    log_step "Removendo Configuração de Rede"
+# ============================================================================
+# LIMPAR CONFIGURAÇÃO DE INTERFACES
+# ============================================================================
 
-    if [[ -f /etc/systemd/network/20-nat-router-*.network ]]; then
-        log_info "Removendo arquivo de rede systemd..."
-        rm -f /etc/systemd/network/20-nat-router-*.network
-        
-        # Reiniciar systemd-networkd
-        if systemctl is-active --quiet systemd-networkd; then
-            systemctl restart systemd-networkd
-        fi
-        
-        log_success "Configuração de rede removida"
+cleanup_interfaces() {
+    log_step "Limpando Configuração de Interfaces"
+    
+    log_info "Procurando por interfaces com IP 10.42.0.1..."
+    
+    # Buscar interfaces que têm o IP do gateway
+    mapfile -t interfaces < <(ip -4 addr show | grep -B2 "inet 10.42.0.1" | grep -oP '^\d+: \K[^:]+' || true)
+    
+    if [[ ${#interfaces[@]} -eq 0 ]]; then
+        log_info "Nenhuma interface com IP 10.42.0.1 encontrada"
     else
-        log_warn "Configuração de rede não encontrada"
+        for iface in "${interfaces[@]}"; do
+            log_info "Removendo IP 10.42.0.1 de $iface..."
+            ip addr del 10.42.0.1/24 dev "$iface" 2>/dev/null || true
+            log_success "IP removido de $iface"
+        done
+    fi
+}
+
+# ============================================================================
+# VERIFICAR LIMPEZA
+# ============================================================================
+
+verify_cleanup() {
+    log_step "Verificando Limpeza"
+    
+    echo "Status dos serviços:"
+    echo "  • nat-router: $(systemctl is-active nat-router 2>/dev/null || echo 'inactive')"
+    echo "  • dnsmasq: $(systemctl is-active dnsmasq 2>/dev/null || echo 'inactive')"
+    echo ""
+    echo "IP Forwarding:"
+    echo "  • IPv4: $(cat /proc/sys/net/ipv4/ip_forward)"
+    echo "  • IPv6: $(cat /proc/sys/net/ipv6/conf/all/forwarding)"
+    echo ""
+    echo "Regras nftables:"
+    if nft list ruleset 2>/dev/null | grep -q "table"; then
+        log_warn "Ainda existem regras no nftables!"
+        nft list ruleset
+    else
+        log_success "Nenhuma regra ativa"
+    fi
+    echo ""
+    echo "Interfaces com IP 10.42.0.x:"
+    ip -4 addr show | grep "inet 10.42.0" || log_success "Nenhuma interface com IP da LAN"
+}
+
+# ============================================================================
+# MENU DE CONFIRMAÇÃO
+# ============================================================================
+
+confirm_cleanup() {
+    echo "========================================="
+    echo "  NAT Router Cleanup"
+    echo "========================================="
+    echo ""
+    log_warn "Esta ação irá:"
+    echo "  • Parar nat-router e dnsmasq"
+    echo "  • Desabilitar serviços no boot"
+    echo "  • Remover arquivos de configuração"
+    echo "  • Limpar regras do firewall"
+    echo "  • Desabilitar IP forwarding"
+    echo "  • Remover IPs 10.42.0.x das interfaces"
+    echo ""
+    read -p "Continuar? (y/N): " -n 1 -r
+    echo
+    
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log_info "Cancelado pelo usuário"
+        exit 0
     fi
 }
 
@@ -183,63 +228,21 @@ remove_network_config() {
 # ============================================================================
 
 main() {
-    log_info "╔════════════════════════════════════════════════════╗"
-    log_info "║   Arch Linux NAT Router Cleanup Script             ║"
-    log_info "║                                                    ║"
-    log_info "║   Remove Todas as Configurações NAT Router         ║"
-    log_info "╚════════════════════════════════════════════════════╝"
-
-    check_root
-
-    # Definir diretório de backup
-    BACKUP_DIR="/root/nat-router-backups"
-
-    # Avisar o usuário
-    echo -e "\n${YELLOW}⚠️  AVISO:${NC}"
-    echo "Este script irá remover:"
-    echo "  • Serviço systemd nat-router"
-    echo "  • Configuração nftables"
-    echo "  • Configuração dnsmasq"
-    echo "  • Configuração sysctl"
-    echo "  • Configuração de rede"
+    confirm_cleanup
+    
+    stop_services
+    disable_services
+    remove_service_files
+    flush_firewall
+    disable_ip_forwarding
+    cleanup_interfaces
+    verify_cleanup
+    
     echo ""
-    echo "Os backups serão mantidos em: $BACKUP_DIR"
+    log_success "Limpeza concluída!"
     echo ""
-
-    if ! confirm "Deseja continuar com a limpeza?"; then
-        log_warn "Limpeza cancelada"
-        exit 0
-    fi
-
-    # Executar limpeza
-    remove_nat_router_service
-    remove_nftables_config
-    remove_dnsmasq_config
-    remove_sysctl_config
-    remove_network_config
-
-    # Resumo
-    log_step "Limpeza Concluída"
-
-    echo -e "${CYAN}┌─ RESUMO ──────────────────────────────────────────┐${NC}"
-    echo -e "${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC} ${GREEN}✓${NC} Todas as configurações NAT Router foram removidas"
-    echo -e "${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC} ${YELLOW}Backups:${NC}"
-    echo -e "${CYAN}│${NC}   Mantidos em: $BACKUP_DIR"
-    echo -e "${CYAN}│${NC}"
-    echo -e "${CYAN}│${NC} ${YELLOW}Próximas Etapas:${NC}"
-    echo -e "${CYAN}│${NC}   • Restart do sistema recomendado"
-    echo -e "${CYAN}│${NC}   • sudo systemctl restart networking"
-    echo -e "${CYAN}│${NC}   • sudo reboot (recomendado)"
-    echo -e "${CYAN}│${NC}"
-    echo -e "${CYAN}└────────────────────────────────────────────────────┘${NC}"
-
-    log_success "Limpeza finalizada"
+    log_info "Para reativar o NAT Router, execute novamente:"
+    log_info "  sudo ./archlinux-nat-router.sh <eth_interface> <wlan_interface>"
 }
-
-# ============================================================================
-# EXECUTAR
-# ============================================================================
 
 main "$@"
