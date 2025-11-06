@@ -160,10 +160,19 @@ setup_nftables() {
     nft add chain inet nat_router forward { type filter hook forward priority 0\; policy accept\; } || { log_error "Falha na chain forward"; exit 1; }
     nft add chain inet nat_router postrouting { type nat hook postrouting priority 100\; policy accept\; } || { log_error "Falha na chain postrouting"; exit 1; }
     
-    log_info "Adicionando regra de masquerade..."
+    log_info "Configurando regras de NAT..."
+    # Masquerade para internet
     nft add rule inet nat_router postrouting oifname "$WLAN_IF" masquerade || { log_error "Falha no masquerade"; exit 1; }
+    
+    log_info "Liberando acesso à rede LAN..."
+    # Permite tráfego da LAN para o roteador (acesso a serviços locais)
+    nft add rule inet nat_router input iifname "$ETH_IF" accept
+    
+    # Permite forwarding bidirecional entre LAN e WAN
+    nft add rule inet nat_router forward iifname "$ETH_IF" oifname "$WLAN_IF" accept
+    nft add rule inet nat_router forward iifname "$WLAN_IF" oifname "$ETH_IF" ct state related,established accept
 
-    log_success "nftables: Masquerade em $WLAN_IF"
+    log_success "nftables: NAT + Acesso LAN habilitado"
 }
 
 # ============================================================================
