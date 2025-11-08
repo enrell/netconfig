@@ -49,16 +49,19 @@ echo "1. Habilitando IP Forwarding..."
 sysctl -w net.ipv4.ip_forward=1 > /dev/null
 sysctl -w net.ipv4.conf.all.rp_filter=0 > /dev/null
 
-# 2. DNAT - Redireciona TODO tráfego para a subnet LAN
-echo "2. Configurando DNAT (redirect)..."
-iptables -t nat -A PREROUTING -d "$WLAN_IP" -j DNAT --to-destination 10.42.0.0/24
+# 2. DNAT - Redireciona TODO tráfego
+echo "2. Configurando DNAT (WAN → LAN)..."
+iptables -t nat -A PREROUTING -i "$WLAN_IF" -d "$WLAN_IP" -j DNAT --to-destination 10.42.0.1
 
-# 3. FORWARD - Aceita tudo
-echo "3. Liberando FORWARD..."
+echo "3. Configurando DNAT (LAN → WAN)..."
+iptables -t nat -A PREROUTING -i "$ETH_IF" -d "$WLAN_IP" -j DNAT --to-destination "$WLAN_IP"
+
+# 4. FORWARD - Aceita tudo
+echo "4. Liberando FORWARD..."
 iptables -A FORWARD -j ACCEPT
 
-# 4. MASQUERADE - Reescreve origem para respostas funcionarem
-echo "4. Configurando MASQUERADE..."
+# 5. MASQUERADE - Bidirecional
+echo "5. Configurando MASQUERADE..."
 iptables -t nat -A POSTROUTING -o "$WLAN_IF" -j MASQUERADE
 iptables -t nat -A POSTROUTING -o "$ETH_IF" -j MASQUERADE
 
