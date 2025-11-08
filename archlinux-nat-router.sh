@@ -3,17 +3,17 @@
 ################################################################################
 #                    Arch Linux NAT Router (LiveUSB)                           #
 #                                                                              #
-# Setup rápido para transformar notebook em roteador NAT                      #
-# Otimizado para LiveUSB - sem persistência de config                         #
-# Suporta Port Forwarding para serviços na LAN                                #
+# Setup rápido para transformar notebook em roteador NAT                       #
+# Otimizado para LiveUSB - sem persistência de config                          #
+# Suporta Port Forwarding para serviços na LAN                                 #
 #                                                                              #
 # PRÉ-REQUISITOS:                                                              #
-#   • Arch Linux em LiveUSB/LiveCD                                            #
-#   • Wi-Fi conectada                                                         #
-#   • 2 interfaces de rede (Ethernet + Wi-Fi)                                 #
+#   • Arch Linux em LiveUSB/LiveCD                                             #
+#   • Wi-Fi conectada                                                          #
+#   • 2 interfaces de rede (Ethernet + Wi-Fi)                                  #
 #                                                                              #
 # USO:                                                                         #
-#   sudo ./archlinux-nat-router.sh enp3s0 wlp4s0                              #
+#   sudo ./archlinux-nat-router.sh enp3s0 wlp4s0                               #
 #                                                                              #
 ################################################################################
 
@@ -142,13 +142,22 @@ configure_eth_interface() {
 # ============================================================================
 
 enable_ip_forwarding() {
-    log_step "Habilitando IP Forwarding"
+    log_step "Habilitando IP Forwarding e Desabilitando Filtros"
 
     sysctl -w net.ipv4.ip_forward=1 > /dev/null
     sysctl -w net.ipv6.conf.all.forwarding=1 > /dev/null
+    
+    # DESABILITAR TODOS OS FILTROS
+    sysctl -w net.ipv4.conf.all.rp_filter=0 > /dev/null
     sysctl -w net.ipv4.conf.default.rp_filter=0 > /dev/null
+    sysctl -w net.ipv4.conf."$ETH_IF".rp_filter=0 > /dev/null
+    sysctl -w net.ipv4.conf."$WLAN_IF".rp_filter=0 > /dev/null
+    
+    # Aceitar pacotes de qualquer origem
+    sysctl -w net.ipv4.conf.all.accept_source_route=1 > /dev/null
+    sysctl -w net.ipv4.conf.all.forwarding=1 > /dev/null
 
-    log_success "IP Forwarding ativo"
+    log_success "Forwarding 100% ABERTO (sem filtros)"
 }
 
 # ============================================================================
@@ -156,7 +165,7 @@ enable_ip_forwarding() {
 # ============================================================================
 
 setup_nftables() {
-    log_step "Configurando Firewall (nftables)"
+    log_step "Configurando Firewall (nftables) - PORT FORWARDING"
 
     log_info "Limpando regras anteriores..."
     nft flush ruleset 2>/dev/null || true
@@ -164,35 +173,33 @@ setup_nftables() {
     log_info "Criando tabela nat_router..."
     nft add table inet nat_router || { log_error "Falha ao criar tabela"; exit 1; }
     
-    log_info "Criando chains..."
-    nft add chain inet nat_router input { type filter hook input priority 0\; policy accept\; } || { log_error "Falha na chain input"; exit 1; }
-    nft add chain inet nat_router forward { type filter hook forward priority 0\; policy accept\; } || { log_error "Falha na chain forward"; exit 1; }
-    nft add chain inet nat_router prerouting { type nat hook prerouting priority -100\; policy accept\; } || { log_error "Falha na chain prerouting"; exit 1; }
-    nft add chain inet nat_router postrouting { type nat hook postrouting priority 100\; policy accept\; } || { log_error "Falha na chain postrouting"; exit 1; }
+    log_info "Criando chains com policy ACCEPT..."
+    nft add chain inet nat_router input { type filter hook input priority 0\; policy accept\; }
+    nft add chain inet nat_router forward { type filter hook forward priority 0\; policy accept\; }
+    nft add chain inet nat_router output { type filter hook output priority 0\; policy accept\; }
+    nft add chain inet nat_router prerouting { type nat hook prerouting priority -100\; policy accept\; }
+    nft add chain inet nat_router postrouting { type nat hook postrouting priority 100\; policy accept\; }
     
     WLAN_IP=$(ip -4 addr show "$WLAN_IF" | grep -oP 'inet \K[0-9.]+' | head -1)
     
-    log_info "Configurando hairpin NAT para toda subnet LAN..."
-    # DNAT: redireciona tráfego do IP Wi-Fi de volta para a LAN (mantém porta destino)
-    nft add rule inet nat_router prerouting iifname "$WLAN_IF" ip daddr "$WLAN_IP" dnat to "$LAN_GATEWAY"
+    log_info "Configurando PORT FORWARDING: $WLAN_IP → toda subnet $LAN_SUBNET..."
     
-    # SNAT/Masquerade para hairpin (conexões da WAN para LAN)
-    nft add rule inet nat_router postrouting oifname "$ETH_IF" ip daddr "$LAN_SUBNET" masquerade
+    # DNAT: Tráfego para o IP do notebook (192.168.0.141) vai para a subnet LAN
+    # Redireciona para o gateway que vai distribuir
+    nft add rule inet nat_router prerouting iifname "$WLAN_IF" ip daddr "$WLAN_IP" dnat to "$LAN_SUBNET"
     
-    log_info "Configurando NAT masquerade..."
-    nft add rule inet nat_router postrouting oifname "$WLAN_IF" masquerade
+    # SNAT: Masquerade para tráfego que entra pela WAN e vai para LAN
+    nft add rule inet nat_router postrouting oifname "$ETH_IF" masquerade
     
-    log_info "Liberando forwarding bidirecional completo..."
-    # LAN → WAN: aceita tudo
-    nft add rule inet nat_router forward iifname "$ETH_IF" oifname "$WLAN_IF" accept
-    # WAN → LAN: aceita tudo (passthrough completo)
-    nft add rule inet nat_router forward iifname "$WLAN_IF" oifname "$ETH_IF" accept
-
-    log_success "Firewall configurado:"
-    log_info "  • NAT Masquerade: LAN → $WLAN_IF ($WLAN_IP)"
-    log_info "  • Hairpin NAT: $WLAN_IP → $LAN_GATEWAY (repassa para LAN)"
-    log_info "  • Forwarding: LAN ↔ WAN (bridge completo)"
-    log_info "  • Subnet LAN: $LAN_SUBNET (todos os IPs acessíveis)"
+    log_info "Configurando NAT masquerade para internet..."
+    # Masquerade para LAN → Internet
+    nft add rule inet nat_router postrouting oifname "$WLAN_IF" ip saddr "$LAN_SUBNET" masquerade
+    
+    log_success "Firewall configurado - PORT FORWARDING TOTAL:"
+    log_info "  • Celular (192.168.0.x) → $WLAN_IP:PORTA"
+    log_info "  • Notebook redireciona → $LAN_SUBNET (todos os PCs na LAN)"
+    log_info "  • Masquerade bidirecional ativo"
+    log_info "  • Policy: ACCEPT (sem bloqueios)"
 }
 
 # ============================================================================
@@ -302,26 +309,24 @@ validate_setup() {
     echo "✓ DHCP: $(systemctl is-active dnsmasq)"
     echo ""
     echo "════════════════════════════════════════"
-    echo "  ROTEADOR NAT + HAIRPIN CONFIGURADO"
+    echo "  PORT FORWARDING CONFIGURADO"
     echo "════════════════════════════════════════"
     echo ""
-    echo "Subnet LAN: $LAN_SUBNET"
-    echo "Gateway: $LAN_GATEWAY"
-    echo "Pool DHCP: $DHCP_START - $DHCP_END"
+    echo "FLUXO DE ACESSO:"
+    echo "  Celular (192.168.0.x)"
+    echo "      ↓"
+    echo "  Notebook Bridge ($WLAN_IP)"
+    echo "      ↓ (port forward)"
+    echo "  PC na LAN (10.42.0.41)"
     echo ""
-    echo "════════════════════════════════════════"
-    echo "  ACESSO EXTERNO (HAIRPIN NAT)"
-    echo "════════════════════════════════════════"
+    echo "COMO ACESSAR JELLYFIN DO CELULAR:"
+    echo "  1. Descubra o IP do PC na LAN"
+    echo "  2. Do celular: http://$WLAN_IP:8096"
+    echo "  3. Notebook redireciona para 10.42.0.x:8096"
     echo ""
-    echo "De fora da rede (celular, outro Wi-Fi):"
-    echo "  • Acesse: http://$WLAN_IP:PORTA"
-    echo "  • Redireciona para: $LAN_GATEWAY:PORTA"
-    echo "  • Funciona com qualquer IP DHCP na LAN"
-    echo ""
-    echo "Exemplos:"
-    echo "  • Servidor web: http://$WLAN_IP:8000"
-    echo "  • SSH: ssh user@$WLAN_IP"
-    echo "  • Qualquer serviço: $WLAN_IP:PORTA"
+    echo "TESTAR:"
+    echo "  • http://$WLAN_IP:8096 (Jellyfin)"
+    echo "  • http://$WLAN_IP:qualquer_porta"
     echo ""
     echo "════════════════════════════════════════"
 }
