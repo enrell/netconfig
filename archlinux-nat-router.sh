@@ -84,7 +84,15 @@ validate_interfaces() {
         exit 1
     fi
 
-    log_success "Interfaces: $ETH_IF (LAN) + $WLAN_IF (WAN)"
+    # Validar se Wi-Fi tem IP válido
+    WLAN_IP=$(ip -4 addr show "$WLAN_IF" | grep -oP 'inet \K[0-9.]+' | head -1)
+    if [[ -z "$WLAN_IP" ]]; then
+        log_error "Interface Wi-Fi '$WLAN_IF' não tem endereço IP"
+        log_info "Conecte o Wi-Fi antes de executar o script"
+        exit 1
+    fi
+
+    log_success "Interfaces: $ETH_IF (LAN) + $WLAN_IF (WAN: $WLAN_IP)"
 }
 
 # ============================================================================
@@ -162,32 +170,24 @@ setup_nftables() {
     nft add chain inet nat_router prerouting { type nat hook prerouting priority -100\; policy accept\; } || { log_error "Falha na chain prerouting"; exit 1; }
     nft add chain inet nat_router postrouting { type nat hook postrouting priority 100\; policy accept\; } || { log_error "Falha na chain postrouting"; exit 1; }
     
-    log_info "Configurando NAT para toda a rede LAN..."
+    log_info "Configurando NAT genérico..."
     
-    # Hairpin NAT - Redireciona conexões do Wi-Fi para o IP do notebook de volta à LAN
-    WLAN_IP=$(ip -4 addr show "$WLAN_IF" | grep -oP 'inet \K[0-9.]+' | head -1)
-    log_info "Criando hairpin NAT para $WLAN_IP → 10.42.0.41..."
-    nft add rule inet nat_router prerouting iifname "$WLAN_IF" ip daddr "$WLAN_IP" dnat to 10.42.0.41
-    
-    log_info "Configurando NAT (masquerade)..."
-    # Masquerade para internet
+    # NAT masquerade simples e genérico - funciona em qualquer máquina
     nft add rule inet nat_router postrouting oifname "$WLAN_IF" masquerade
-    # Masquerade para hairpin (quando vem do Wi-Fi e vai pra LAN)
-    nft add rule inet nat_router postrouting oifname "$ETH_IF" ip saddr "$WLAN_IP" masquerade
     
-    log_info "Liberando tráfego LAN..."
+    log_info "Liberando tráfego..."
     # Permite acesso aos serviços do roteador
     nft add rule inet nat_router input iifname "$ETH_IF" accept
+    nft add rule inet nat_router input iifname "$WLAN_IF" ct state established,related accept
     
     # Permite forwarding bidirecional completo
     nft add rule inet nat_router forward iifname "$ETH_IF" oifname "$WLAN_IF" accept
-    nft add rule inet nat_router forward iifname "$WLAN_IF" oifname "$ETH_IF" accept
-    nft add rule inet nat_router forward iifname "$WLAN_IF" oifname "$ETH_IF" ip daddr 10.42.0.0/24 accept
+    nft add rule inet nat_router forward iifname "$WLAN_IF" oifname "$ETH_IF" ct state established,related accept
 
+    WLAN_IP=$(ip -4 addr show "$WLAN_IF" | grep -oP 'inet \K[0-9.]+' | head -1)
     log_success "Firewall configurado:"
-    log_info "  • Hairpin NAT: $WLAN_IP → 10.42.0.41"
-    log_info "  • Masquerade: $WLAN_IF (internet) + $ETH_IF (hairpin)"
-    log_info "  • Bridge completo: WAN ↔ LAN (todas as portas)"
+    log_info "  • NAT Masquerade: LAN → $WLAN_IF ($WLAN_IP)"
+    log_info "  • Forwarding: LAN ↔ WAN (stateful)"
 }
 
 # ============================================================================
@@ -295,21 +295,16 @@ validate_setup() {
     echo "✓ DHCP: $(systemctl is-active dnsmasq)"
     echo ""
     echo "════════════════════════════════════════"
-    echo "  COMO ACESSAR SERVIÇOS NA LAN"
+    echo "  ROTEADOR NAT CONFIGURADO"
     echo "════════════════════════════════════════"
     echo ""
-    echo "Do celular/Wi-Fi, acesse os serviços na LAN:"
-    WLAN_IP=$(ip -4 addr show "$WLAN_IF" | grep -oE 'inet [0-9.]+' | awk '{print $2}' | head -1)
-    echo "  • http://$WLAN_IP:PORTA → 10.42.0.41:PORTA"
+    echo "Gateway LAN: $LAN_GATEWAY"
+    echo "Pool DHCP: $DHCP_START - $DHCP_END"
     echo ""
-    echo "Exemplos:"
-    echo "  • Jellyfin: http://$WLAN_IP:8096"
-    echo "  • SSH: ssh -J user@$WLAN_IP user@10.42.0.41"
-    echo "  • Qualquer serviço: substitua a PORTA"
-    echo ""
-    echo "Da LAN (PC conectado via Ethernet):"
-    echo "  • Jellyfin: http://10.42.0.41:8096"
-    echo "  • Configurar rede: sudo dhclient eth0"
+    echo "Dispositivos conectados à LAN terão:"
+    echo "  • Internet via NAT"
+    echo "  • DNS: 8.8.8.8, 8.8.4.4"
+    echo "  • Gateway: $LAN_GATEWAY"
     echo ""
     echo "════════════════════════════════════════"
 }
