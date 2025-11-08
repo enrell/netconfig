@@ -3,11 +3,11 @@
 ################################################################################
 #                    NAT Router Cleanup Script                                 #
 #                                                                              #
-# Remove TODAS as configurações do NAT Router                                 #
-# Use antes de reconfigurar ou para desativar o roteador                      #
+# Remove TODAS as configurações de rede do NAT Router                         #
+# Reseta interfaces, firewall, forwarding - exceto wpa_supplicant             #
 #                                                                              #
 # USO:                                                                         #
-#   sudo ./cleanup-nat-router.sh                                              #
+#   sudo ./cleanup-archlinux-nat-router.sh                                    #
 #                                                                              #
 ################################################################################
 
@@ -154,20 +154,37 @@ disable_ip_forwarding() {
 cleanup_interfaces() {
     log_step "Limpando Configuração de Interfaces"
     
-    log_info "Procurando por interfaces com IP 10.42.0.1..."
+    # Remover todos os IPs da subnet 10.42.0.0/24 de todas as interfaces
+    log_info "Procurando IPs 10.42.0.x em interfaces..."
     
-    # Buscar interfaces que têm o IP do gateway
-    mapfile -t interfaces < <(ip -4 addr show | grep -B2 "inet 10.42.0.1" | grep -oP '^\d+: \K[^:]+' || true)
+    while IFS= read -r line; do
+        iface=$(echo "$line" | awk '{print $NF}')
+        ip=$(echo "$line" | awk '{print $2}')
+        
+        log_info "Removendo $ip de $iface..."
+        ip addr del "$ip" dev "$iface" 2>/dev/null || true
+        log_success "IP removido de $iface"
+    done < <(ip -4 addr show | grep "inet 10.42.0" || true)
     
-    if [[ ${#interfaces[@]} -eq 0 ]]; then
-        log_info "Nenhuma interface com IP 10.42.0.1 encontrada"
-    else
-        for iface in "${interfaces[@]}"; do
-            log_info "Removendo IP 10.42.0.1 de $iface..."
-            ip addr del 10.42.0.1/24 dev "$iface" 2>/dev/null || true
-            log_success "IP removido de $iface"
-        done
-    fi
+    # Flush de todas as rotas relacionadas à subnet
+    log_info "Removendo rotas para 10.42.0.0/24..."
+    ip route del 10.42.0.0/24 2>/dev/null || true
+    
+    log_success "Interfaces resetadas"
+}
+
+# ============================================================================
+# RESETAR RP FILTER
+# ============================================================================
+
+reset_rp_filter() {
+    log_step "Resetando Configurações de Kernel"
+    
+    log_info "Restaurando rp_filter..."
+    sysctl -w net.ipv4.conf.default.rp_filter=1 > /dev/null
+    sysctl -w net.ipv4.conf.all.rp_filter=1 > /dev/null
+    
+    log_success "Parâmetros do kernel restaurados"
 }
 
 # ============================================================================
@@ -185,6 +202,10 @@ verify_cleanup() {
     echo "  • IPv4: $(cat /proc/sys/net/ipv4/ip_forward)"
     echo "  • IPv6: $(cat /proc/sys/net/ipv6/conf/all/forwarding)"
     echo ""
+    echo "RP Filter:"
+    echo "  • default: $(cat /proc/sys/net/ipv4/conf/default/rp_filter)"
+    echo "  • all: $(cat /proc/sys/net/ipv4/conf/all/rp_filter)"
+    echo ""
     echo "Regras nftables:"
     if nft list ruleset 2>/dev/null | grep -q "table"; then
         log_warn "Ainda existem regras no nftables!"
@@ -194,7 +215,20 @@ verify_cleanup() {
     fi
     echo ""
     echo "Interfaces com IP 10.42.0.x:"
-    ip -4 addr show | grep "inet 10.42.0" || log_success "Nenhuma interface com IP da LAN"
+    if ip -4 addr show | grep -q "inet 10.42.0"; then
+        log_warn "Ainda existem IPs configurados:"
+        ip -4 addr show | grep "inet 10.42.0"
+    else
+        log_success "Nenhuma interface com IP da LAN"
+    fi
+    echo ""
+    echo "Rotas para 10.42.0.0/24:"
+    if ip route show | grep -q "10.42.0.0/24"; then
+        log_warn "Ainda existem rotas:"
+        ip route show | grep "10.42.0.0/24"
+    else
+        log_success "Nenhuma rota configurada"
+    fi
 }
 
 # ============================================================================
@@ -210,9 +244,14 @@ confirm_cleanup() {
     echo "  • Parar nat-router e dnsmasq"
     echo "  • Desabilitar serviços no boot"
     echo "  • Remover arquivos de configuração"
-    echo "  • Limpar regras do firewall"
+    echo "  • Limpar TODAS as regras do firewall"
     echo "  • Desabilitar IP forwarding"
-    echo "  • Remover IPs 10.42.0.x das interfaces"
+    echo "  • Remover TODOS os IPs 10.42.0.x"
+    echo "  • Remover rotas da subnet 10.42.0.0/24"
+    echo "  • Resetar parâmetros do kernel (rp_filter)"
+    echo ""
+    log_info "NÃO será alterado:"
+    echo "  • wpa_supplicant (Wi-Fi permanece conectado)"
     echo ""
     read -p "Continuar? (y/N): " -n 1 -r
     echo
@@ -235,14 +274,21 @@ main() {
     remove_service_files
     flush_firewall
     disable_ip_forwarding
+    reset_rp_filter
     cleanup_interfaces
     verify_cleanup
     
     echo ""
-    log_success "Limpeza concluída!"
+    log_success "Sistema de rede completamente resetado!"
     echo ""
-    log_info "Para reativar o NAT Router, execute novamente:"
-    log_info "  sudo ./archlinux-nat-router.sh <eth_interface> <wlan_interface>"
+    log_info "Estado atual:"
+    echo "  • Firewall: limpo (sem regras)"
+    echo "  • Forwarding: desabilitado"
+    echo "  • Interfaces: sem IPs 10.42.0.x"
+    echo "  • Wi-Fi: mantido conectado"
+    echo ""
+    log_info "Para reativar o NAT Router:"
+    echo "  sudo ./archlinux-nat-router.sh <eth_interface> <wlan_interface>"
 }
 
 main "$@"
