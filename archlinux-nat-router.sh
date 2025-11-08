@@ -170,24 +170,19 @@ setup_nftables() {
     nft add chain inet nat_router prerouting { type nat hook prerouting priority -100\; policy accept\; } || { log_error "Falha na chain prerouting"; exit 1; }
     nft add chain inet nat_router postrouting { type nat hook postrouting priority 100\; policy accept\; } || { log_error "Falha na chain postrouting"; exit 1; }
     
-    log_info "Configurando NAT genérico..."
-    
-    # NAT masquerade simples e genérico - funciona em qualquer máquina
+    log_info "Configurando NAT masquerade..."
     nft add rule inet nat_router postrouting oifname "$WLAN_IF" masquerade
     
-    log_info "Liberando tráfego..."
-    # Permite acesso aos serviços do roteador
-    nft add rule inet nat_router input iifname "$ETH_IF" accept
-    nft add rule inet nat_router input iifname "$WLAN_IF" ct state established,related accept
-    
-    # Permite forwarding bidirecional completo
+    log_info "Liberando forwarding bidirecional completo..."
+    # LAN → WAN: aceita tudo
     nft add rule inet nat_router forward iifname "$ETH_IF" oifname "$WLAN_IF" accept
-    nft add rule inet nat_router forward iifname "$WLAN_IF" oifname "$ETH_IF" ct state established,related accept
+    # WAN → LAN: aceita tudo (passthrough completo)
+    nft add rule inet nat_router forward iifname "$WLAN_IF" oifname "$ETH_IF" accept
 
     WLAN_IP=$(ip -4 addr show "$WLAN_IF" | grep -oP 'inet \K[0-9.]+' | head -1)
     log_success "Firewall configurado:"
     log_info "  • NAT Masquerade: LAN → $WLAN_IF ($WLAN_IP)"
-    log_info "  • Forwarding: LAN ↔ WAN (stateful)"
+    log_info "  • Forwarding: LAN ↔ WAN (bridge completo, sem filtros)"
 }
 
 # ============================================================================
