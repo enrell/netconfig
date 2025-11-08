@@ -13,8 +13,7 @@
 #   • 2 interfaces de rede (Ethernet + Wi-Fi)                                 #
 #                                                                              #
 # USO:                                                                         #
-#   sudo ./archlinux-nat-router.sh enp3s0 wlp4s0              # NAT básico    #
-#   sudo ./archlinux-nat-router.sh enp3s0 wlp4s0 10.42.0.41   # Com hairpin   #
+#   sudo ./archlinux-nat-router.sh enp3s0 wlp4s0                              #
 #                                                                              #
 ################################################################################
 
@@ -30,13 +29,9 @@ WLAN_IF="${2:-}"
 # Rede LAN
 LAN_GATEWAY="10.42.0.1"
 LAN_NETMASK="24"
+LAN_SUBNET="10.42.0.0/24"
 DHCP_START="10.42.0.10"
 DHCP_END="10.42.0.100"
-
-# Port Forwarding / Hairpin NAT
-# Redireciona todo tráfego do IP Wi-Fi para um servidor na LAN
-# Formato: LAN_TARGET_IP="10.42.0.41"  (deixe vazio para desabilitar)
-LAN_TARGET_IP="${3:-}"  # Terceiro argumento opcional
 
 # ============================================================================
 # CORES PARA OUTPUT
@@ -177,16 +172,12 @@ setup_nftables() {
     
     WLAN_IP=$(ip -4 addr show "$WLAN_IF" | grep -oP 'inet \K[0-9.]+' | head -1)
     
-    # Port Forwarding / Hairpin NAT (se especificado)
-    if [[ -n "$LAN_TARGET_IP" ]]; then
-        log_info "Configurando hairpin NAT: $WLAN_IP → $LAN_TARGET_IP..."
-        
-        # DNAT: redireciona tráfego destinado ao IP do Wi-Fi para o servidor na LAN
-        nft add rule inet nat_router prerouting iifname "$WLAN_IF" ip daddr "$WLAN_IP" dnat to "$LAN_TARGET_IP"
-        
-        # SNAT/Masquerade para hairpin (conexões vindo da WAN indo para LAN)
-        nft add rule inet nat_router postrouting oifname "$ETH_IF" ip daddr "$LAN_TARGET_IP" masquerade
-    fi
+    log_info "Configurando hairpin NAT para toda subnet LAN..."
+    # DNAT: redireciona tráfego do IP Wi-Fi de volta para a LAN (mantém porta destino)
+    nft add rule inet nat_router prerouting iifname "$WLAN_IF" ip daddr "$WLAN_IP" dnat to "$LAN_GATEWAY"
+    
+    # SNAT/Masquerade para hairpin (conexões da WAN para LAN)
+    nft add rule inet nat_router postrouting oifname "$ETH_IF" ip daddr "$LAN_SUBNET" masquerade
     
     log_info "Configurando NAT masquerade..."
     nft add rule inet nat_router postrouting oifname "$WLAN_IF" masquerade
@@ -199,12 +190,9 @@ setup_nftables() {
 
     log_success "Firewall configurado:"
     log_info "  • NAT Masquerade: LAN → $WLAN_IF ($WLAN_IP)"
-    log_info "  • Forwarding: LAN ↔ WAN (bridge completo, sem filtros)"
-    
-    if [[ -n "$LAN_TARGET_IP" ]]; then
-        log_success "  • Hairpin NAT: $WLAN_IP (WAN) → $LAN_TARGET_IP (LAN)"
-        log_info "    Acesse de fora: http://$WLAN_IP:PORTA"
-    fi
+    log_info "  • Hairpin NAT: $WLAN_IP → $LAN_GATEWAY (repassa para LAN)"
+    log_info "  • Forwarding: LAN ↔ WAN (bridge completo)"
+    log_info "  • Subnet LAN: $LAN_SUBNET (todos os IPs acessíveis)"
 }
 
 # ============================================================================
@@ -306,41 +294,35 @@ EOF
 validate_setup() {
     log_step "Status Final"
 
+    WLAN_IP=$(ip -4 addr show "$WLAN_IF" | grep -oE 'inet [0-9.]+' | awk '{print $2}' | head -1)
+    
     echo "✓ Ethernet ($ETH_IF): $(ip -4 addr show "$ETH_IF" | grep -oE 'inet [^ ]*' | awk '{print $2}')"
-    echo "✓ Wi-Fi ($WLAN_IF): $(ip -4 addr show "$WLAN_IF" | grep -oE 'inet [^ ]*' | awk '{print $2}' | head -1)"
+    echo "✓ Wi-Fi ($WLAN_IF): $WLAN_IP"
     echo "✓ IP Forwarding: $(cat /proc/sys/net/ipv4/ip_forward)"
     echo "✓ DHCP: $(systemctl is-active dnsmasq)"
     echo ""
     echo "════════════════════════════════════════"
-    echo "  ROTEADOR NAT CONFIGURADO"
+    echo "  ROTEADOR NAT + HAIRPIN CONFIGURADO"
     echo "════════════════════════════════════════"
     echo ""
-    echo "Gateway LAN: $LAN_GATEWAY"
+    echo "Subnet LAN: $LAN_SUBNET"
+    echo "Gateway: $LAN_GATEWAY"
     echo "Pool DHCP: $DHCP_START - $DHCP_END"
     echo ""
-    
-    if [[ -n "$LAN_TARGET_IP" ]]; then
-        WLAN_IP=$(ip -4 addr show "$WLAN_IF" | grep -oE 'inet [0-9.]+' | awk '{print $2}' | head -1)
-        echo "════════════════════════════════════════"
-        echo "  HAIRPIN NAT ATIVO"
-        echo "════════════════════════════════════════"
-        echo ""
-        echo "Servidor na LAN: $LAN_TARGET_IP"
-        echo "Acesso externo: $WLAN_IP (todas as portas)"
-        echo ""
-        echo "Exemplos de uso:"
-        echo "  • HTTP: http://$WLAN_IP:8000"
-        echo "  • SSH: ssh user@$WLAN_IP -p 22"
-        echo "  • Qualquer serviço: $WLAN_IP:PORTA → $LAN_TARGET_IP:PORTA"
-        echo ""
-    else
-        echo "Dispositivos conectados à LAN terão:"
-        echo "  • Internet via NAT"
-        echo "  • Acesso direto entre LAN e WAN"
-        echo "  • DNS: 8.8.8.8, 8.8.4.4"
-        echo ""
-    fi
-    
+    echo "════════════════════════════════════════"
+    echo "  ACESSO EXTERNO (HAIRPIN NAT)"
+    echo "════════════════════════════════════════"
+    echo ""
+    echo "De fora da rede (celular, outro Wi-Fi):"
+    echo "  • Acesse: http://$WLAN_IP:PORTA"
+    echo "  • Redireciona para: $LAN_GATEWAY:PORTA"
+    echo "  • Funciona com qualquer IP DHCP na LAN"
+    echo ""
+    echo "Exemplos:"
+    echo "  • Servidor web: http://$WLAN_IP:8000"
+    echo "  • SSH: ssh user@$WLAN_IP"
+    echo "  • Qualquer serviço: $WLAN_IP:PORTA"
+    echo ""
     echo "════════════════════════════════════════"
 }
 
